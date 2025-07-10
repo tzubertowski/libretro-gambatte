@@ -1211,6 +1211,20 @@ struct retro_core_option_v2_definition option_defs_us[] = {
       "enabled"
    },
    {
+      "gambatte_fake_rtc",
+      "Fake RTC",
+      NULL,
+      "Enable software-based Real Time Clock for devices without hardware RTC support. Provides consistent time tracking for Pokemon Gold/Silver and other MBC3 RTC games.",
+      NULL,
+      NULL,
+      {
+         { "disabled", "disabled" },
+         { "enabled", "enabled" },
+         { NULL, NULL },
+      },
+      "enabled"
+   },
+   {
       "gambatte_fake_rtc_persistent_bump_minutes",
       "Persistent Time Bump (Minutes)",
       NULL,
