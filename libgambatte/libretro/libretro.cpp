@@ -229,10 +229,9 @@ static void sf2000_draw_splash_screen(gambatte::video_pixel_t *video_buf)
    }
    
    /* Draw splash text */
-   sf2000_draw_string(video_buf, 16, 20, "GAMBATTE DASH V.", white_color);
-   sf2000_draw_string(video_buf, 8, 35, "FAST FORWARD AND", white_color);
-   sf2000_draw_string(video_buf, 8, 50, "SLOW MOTION EDITION", white_color);
-   sf2000_draw_string(video_buf, 24, 70, "MOD BY PROSTY", white_color);
+   sf2000_draw_string(video_buf, 16, 20, "GAMBATTE DASH V", white_color);
+   sf2000_draw_string(video_buf, 24, 35, "MOD BY PROSTY", white_color);
+   sf2000_draw_string(video_buf, 8, 60, "discord.gg/bvfKkHvsXK", white_color);
    sf2000_draw_string(video_buf, 16, 90, "SEL + A TO FF", black_color);
    sf2000_draw_string(video_buf, 16, 105, "SEL + B TO SM", black_color);
 }
