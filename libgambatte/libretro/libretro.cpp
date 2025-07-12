@@ -118,6 +118,31 @@ bool use_official_bootloader = false;
 #define VIDEO_REFRESH_RATE (4194304.0 / 70224.0)
 
 #ifdef SF2000
+/* Build date version string in ddmmyyyy format */
+static const char* sf2000_get_build_version(void)
+{
+    static char version_str[16];
+    const char* date = __DATE__;  /* Format: "Mmm dd yyyy" */
+    const char* month_str = date;
+    int day = (date[4] == ' ') ? (date[5] - '0') : ((date[4] - '0') * 10 + (date[5] - '0'));
+    const char* year = date + 7;
+    
+    int month = 1;
+    if (month_str[0] == 'F') month = 2;      /* Feb */
+    else if (month_str[0] == 'M' && month_str[2] == 'r') month = 3;  /* Mar */
+    else if (month_str[0] == 'A' && month_str[1] == 'p') month = 4;  /* Apr */
+    else if (month_str[0] == 'M' && month_str[2] == 'y') month = 5;  /* May */
+    else if (month_str[0] == 'J' && month_str[1] == 'u' && month_str[2] == 'n') month = 6;  /* Jun */
+    else if (month_str[0] == 'J' && month_str[1] == 'u' && month_str[2] == 'l') month = 7;  /* Jul */
+    else if (month_str[0] == 'A' && month_str[1] == 'u') month = 8;  /* Aug */
+    else if (month_str[0] == 'S') month = 9;   /* Sep */
+    else if (month_str[0] == 'O') month = 10;  /* Oct */
+    else if (month_str[0] == 'N') month = 11;  /* Nov */
+    else if (month_str[0] == 'D') month = 12;  /* Dec */
+    
+    snprintf(version_str, sizeof(version_str), "ver %02d%02d%s", day, month, year);
+    return version_str;
+}
 /* Simple 8x8 font data for splash screen - only basic characters */
 static const unsigned char splash_font_8x8[][8] = {
    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, // Space (32)
@@ -267,6 +292,9 @@ static void sf2000_draw_splash_screen(gambatte::video_pixel_t *video_buf)
    sf2000_draw_string(video_buf, 16, 70, "bvfKkHvsXK", white_color);
    sf2000_draw_string(video_buf, 16, 90, "SEL + A TO FF", black_color);
    sf2000_draw_string(video_buf, 16, 105, "SEL + B TO SM", black_color);
+   
+   /* Add compilation date version at bottom */
+   sf2000_draw_string(video_buf, 28, 130, sf2000_get_build_version(), white_color);
 }
 #endif
 
