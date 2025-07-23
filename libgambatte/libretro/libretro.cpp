@@ -63,12 +63,23 @@ static bool libretro_supports_ff_override       = false;
 static unsigned sf2000_fastforward_state        = 0;  /* 0=1x, 1=3x, 2=5x */
 static bool sf2000_select_a_prev                = false;
 static unsigned sf2000_slowmotion_state         = 0;  /* 0=1x, 1=0.5x, 2=0.2x */
-static bool sf2000_select_b_prev                = false;
+static bool sf2000_select_left_prev             = false;
 static unsigned sf2000_frame_counter            = 0;  /* Frame counter for manual speed control */
 static unsigned sf2000_slowmotion_frame_counter = 0;  /* Frame counter for slow motion */
 static bool sf2000_splash_shown                 = false;
 static unsigned sf2000_splash_timer             = 0;
 #define SF2000_SPLASH_DURATION                   180    /* 6 seconds at 60fps */
+
+/* Rewind functionality */
+#define REWIND_BUFFER_SIZE                       300    /* 10 seconds at 30fps */
+#define REWIND_SAVE_INTERVAL                     2      /* Save state every 2 frames */
+static void** rewind_buffer                      = NULL;
+static size_t rewind_state_size                  = 0;
+static unsigned rewind_buffer_head               = 0;
+static unsigned rewind_buffer_count              = 0;
+static unsigned rewind_frame_counter             = 0;
+static bool sf2000_rewind_active                = false;
+static bool sf2000_select_b_prev                = false;
 
 #else
 static bool libretro_ff_enabled                 = false;
@@ -291,7 +302,8 @@ static void sf2000_draw_splash_screen(gambatte::video_pixel_t *video_buf)
    sf2000_draw_string(video_buf, 8, 55, "discord.gg/", white_color);
    sf2000_draw_string(video_buf, 16, 70, "bvfKkHvsXK", white_color);
    sf2000_draw_string(video_buf, 16, 90, "SEL + A TO FF", black_color);
-   sf2000_draw_string(video_buf, 16, 105, "SEL + B TO SM", black_color);
+   sf2000_draw_string(video_buf, 16, 105, "SEL + LEFT TO SM", black_color);
+   sf2000_draw_string(video_buf, 16, 120, "SEL + B TO REWIND", black_color);
    
    /* Add compilation date version at bottom */
    sf2000_draw_string(video_buf, 28, 130, sf2000_get_build_version(), white_color);
@@ -1662,6 +1674,105 @@ static bool update_option_visibility(void)
 #endif
 
 #ifdef SF2000
+/* Rewind buffer management functions */
+static void rewind_init_buffer(void)
+{
+   unsigned i;
+   
+   if (rewind_buffer)
+      return;  /* Already initialized */
+      
+   rewind_state_size = gb.stateSize();
+   if (rewind_state_size == 0)
+      return;
+      
+   rewind_buffer = (void**)malloc(REWIND_BUFFER_SIZE * sizeof(void*));
+   if (!rewind_buffer)
+      return;
+      
+   for (i = 0; i < REWIND_BUFFER_SIZE; i++)
+   {
+      rewind_buffer[i] = malloc(rewind_state_size);
+      if (!rewind_buffer[i])
+      {
+         /* Clean up on failure */
+         while (i > 0)
+         {
+            i--;
+            free(rewind_buffer[i]);
+         }
+         free(rewind_buffer);
+         rewind_buffer = NULL;
+         return;
+      }
+   }
+   
+   rewind_buffer_head = 0;
+   rewind_buffer_count = 0;
+   rewind_frame_counter = 0;
+}
+
+static void rewind_deinit_buffer(void)
+{
+   unsigned i;
+   
+   if (!rewind_buffer)
+      return;
+      
+   for (i = 0; i < REWIND_BUFFER_SIZE; i++)
+   {
+      if (rewind_buffer[i])
+         free(rewind_buffer[i]);
+   }
+   
+   free(rewind_buffer);
+   rewind_buffer = NULL;
+   rewind_buffer_head = 0;
+   rewind_buffer_count = 0;
+}
+
+static void rewind_save_state(void)
+{
+   if (!rewind_buffer || rewind_state_size == 0)
+      return;
+      
+   /* Save current state to buffer */
+   gb.saveState(rewind_buffer[rewind_buffer_head]);
+   
+   /* Advance head pointer (circular buffer) */
+   rewind_buffer_head = (rewind_buffer_head + 1) % REWIND_BUFFER_SIZE;
+   
+   /* Track how many states we have */
+   if (rewind_buffer_count < REWIND_BUFFER_SIZE)
+      rewind_buffer_count++;
+}
+
+static bool rewind_load_state(void)
+{
+   unsigned load_index;
+   
+   if (!rewind_buffer || rewind_buffer_count == 0)
+      return false;
+      
+   /* Calculate index to load from (go backwards) */
+   if (rewind_buffer_head == 0)
+      load_index = REWIND_BUFFER_SIZE - 1;
+   else
+      load_index = rewind_buffer_head - 1;
+      
+   /* Load the state */
+   gb.loadState(rewind_buffer[load_index]);
+   
+   /* Move head back */
+   rewind_buffer_head = load_index;
+   
+   /* Decrease count */
+   if (rewind_buffer_count > 0)
+      rewind_buffer_count--;
+      
+   return true;
+}
+
 /* Manual fast forward implementation for SF2000 */
 static void set_fastforward_override(unsigned speed_state)
 {
@@ -1843,12 +1954,11 @@ static void update_input_state(void)
       }
       sf2000_select_a_prev = sf2000_select_a_current;
       
-      /* SF2000: Check for SELECT+B combination for slow motion */
-      /* On SF2000, B button is mapped to RETRO_DEVICE_ID_JOYPAD_B (button 1) */
-      bool b_pressed = (ret & (1 << RETRO_DEVICE_ID_JOYPAD_B));
-      bool sf2000_select_b_current = select_pressed && b_pressed;
+      /* SF2000: Check for SELECT+LEFT combination for slow motion */
+      bool left_pressed = (ret & (1 << RETRO_DEVICE_ID_JOYPAD_LEFT));
+      bool sf2000_select_left_current = select_pressed && left_pressed;
       
-      if (sf2000_select_b_current && !sf2000_select_b_prev)
+      if (sf2000_select_left_current && !sf2000_select_left_prev)
       {
          /* Reset fast forward when slow motion is activated */
          sf2000_fastforward_state = 0;
@@ -1859,7 +1969,12 @@ static void update_input_state(void)
          sf2000_slowmotion_frame_counter = 0;
          
       }
-      sf2000_select_b_prev = sf2000_select_b_current;
+      sf2000_select_left_prev = sf2000_select_left_current;
+      
+      /* SF2000: Check for SELECT+B combination for rewind */
+      bool b_pressed = (ret & (1 << RETRO_DEVICE_ID_JOYPAD_B));
+      sf2000_rewind_active = select_pressed && b_pressed;
+      
 #else
       libretro_ff_enabled = libretro_supports_ff_override &&
             (ret & (1 << RETRO_DEVICE_ID_JOYPAD_R2));
@@ -1903,12 +2018,11 @@ static void update_input_state(void)
       }
       sf2000_select_a_prev = sf2000_select_a_current;
       
-      /* SF2000: Check for SELECT+B combination for slow motion */
-      /* On SF2000, B button is mapped to RETRO_DEVICE_ID_JOYPAD_B (button 1) */
-      bool b_pressed = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
-      bool sf2000_select_b_current = select_pressed && b_pressed;
+      /* SF2000: Check for SELECT+LEFT combination for slow motion */
+      bool left_pressed = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_LEFT);
+      bool sf2000_select_left_current = select_pressed && left_pressed;
       
-      if (sf2000_select_b_current && !sf2000_select_b_prev)
+      if (sf2000_select_left_current && !sf2000_select_left_prev)
       {
          /* Reset fast forward when slow motion is activated */
          sf2000_fastforward_state = 0;
@@ -1919,7 +2033,12 @@ static void update_input_state(void)
          sf2000_slowmotion_frame_counter = 0;
          
       }
-      sf2000_select_b_prev = sf2000_select_b_current;
+      sf2000_select_left_prev = sf2000_select_left_current;
+      
+      /* SF2000: Check for SELECT+B combination for rewind */
+      bool b_pressed = input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B);
+      sf2000_rewind_active = select_pressed && b_pressed;
+      
 #else
       libretro_ff_enabled = libretro_supports_ff_override &&
             input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2);
@@ -2185,6 +2304,8 @@ void retro_deinit(void)
    gambatte::fake_rtc_save();
 
 #ifdef SF2000
+   /* Clean up rewind buffer on deinit */
+   rewind_deinit_buffer();
    if (sf2000_fastforward_state != 0)
       set_fastforward_override(0);  /* Reset to 1x speed */
 #else
@@ -2199,9 +2320,12 @@ void retro_deinit(void)
    sf2000_fastforward_state            = 0;
    sf2000_select_a_prev                = false;
    sf2000_slowmotion_state             = 0;
-   sf2000_select_b_prev                = false;
+   sf2000_select_left_prev             = false;
    sf2000_frame_counter                = 0;
    sf2000_slowmotion_frame_counter     = 0;
+   sf2000_rewind_active                = false;
+   sf2000_select_b_prev                = false;
+   rewind_frame_counter                = 0;
 #else
    libretro_ff_enabled                 = false;
    libretro_ff_enabled_prev            = false;
@@ -3326,6 +3450,11 @@ bool retro_load_game(const struct retro_game_info *info)
    bool yes = true;
    environ_cb(RETRO_ENVIRONMENT_SET_SUPPORT_ACHIEVEMENTS, &yes);
 
+#ifdef SF2000
+   /* Initialize rewind buffer after game is loaded */
+   rewind_init_buffer();
+#endif
+
    rom_loaded = true;
    return true;
 }
@@ -3335,6 +3464,10 @@ bool retro_load_game_special(unsigned, const struct retro_game_info*, size_t) { 
 
 void retro_unload_game()
 {
+#ifdef SF2000
+   /* Clean up rewind buffer */
+   rewind_deinit_buffer();
+#endif
    rom_loaded = false;
 }
 
@@ -3386,6 +3519,18 @@ static void retro_run_internal();
 void retro_run()
 {
 #ifdef SF2000
+   /* SF2000: Handle rewind first */
+   if (sf2000_rewind_active)
+   {
+      /* Load previous state if available */
+      if (rewind_load_state())
+      {
+         /* Rewind successful, just output the loaded state */
+         retro_run_internal();
+         return;
+      }
+   }
+   
    /* SF2000: Run multiple internal cycles for fast forward */
    if (sf2000_fastforward_state > 0)
    {
@@ -3398,6 +3543,17 @@ void retro_run()
    else
    {
       retro_run_internal();
+   }
+   
+   /* SF2000: Save state for rewind (every REWIND_SAVE_INTERVAL frames) */
+   if (!sf2000_rewind_active && sf2000_fastforward_state == 0 && sf2000_slowmotion_state == 0)
+   {
+      rewind_frame_counter++;
+      if (rewind_frame_counter >= REWIND_SAVE_INTERVAL)
+      {
+         rewind_save_state();
+         rewind_frame_counter = 0;
+      }
    }
 #else
    retro_run_internal();
